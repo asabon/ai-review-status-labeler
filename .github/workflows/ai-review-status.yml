@@ -1,0 +1,32 @@
+name: AI Review Status Sync
+
+on:
+  issue_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted]
+  check_run:
+    types: [completed]
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: read
+  checks: read
+
+jobs:
+  label-sync:
+    if: >
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.login == 'coderabbitai[bot]') ||
+      (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
+      (github.event_name == 'check_run' && github.event.check_run.app.slug == 'coderabbitai') ||
+      (github.event_name == 'pull_request' && github.event.action == 'synchronize')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync AI Review Status
+        uses: asabon/ai-review-status-labeler@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          provider: 'coderabbit'
