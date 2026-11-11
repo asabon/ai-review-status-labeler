@@ -49,7 +49,7 @@ The Action manages a mutually exclusive set of status labels per PR:
   - Initially targeted for CodeRabbit (`coderabbit`), structured with a `ProviderAdapter` interface so adapters for other AI review bots (GitHub Copilot PR Review, Qodo Merge, etc.) can be plugged in.
 
 ### 2. Technical Stack & Implementation Guidelines
-- **Type:** TypeScript Action (`node20`) compiled via `@vercel/ncc` (`dist/index.js`), tested with Vitest.
+- **Type:** TypeScript Action (`node24`) compiled via `@vercel/ncc` (`dist/index.js`), tested with Vitest.
 - **Dependencies:** `@actions/core`, `@actions/github`.
 - **Permissions Required:**
   - `pull-requests: write`
