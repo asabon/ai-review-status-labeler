@@ -1,5 +1,10 @@
 # AI Review Status Labeler (`ai-review-status-labeler`)
 
+[![CI](https://github.com/asabon/ai-review-status-labeler/actions/workflows/ci.yml/badge.svg)](https://github.com/asabon/ai-review-status-labeler/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js 24](https://img.shields.io/badge/node-24-339933.svg?logo=node.js&logoColor=white)](action.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6.svg?logo=typescript&logoColor=white)](tsconfig.json)
+
 A GitHub Action that automatically inspects AI code review results (e.g., CodeRabbit) and synchronizes pull request labels to reflect actionable comments, clean reviews, or skipped evaluations due to rate limits.
 
 ---
