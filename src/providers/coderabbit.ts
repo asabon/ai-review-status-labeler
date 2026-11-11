@@ -24,6 +24,13 @@ const ZERO_ACTIONABLE_REGEX = /\bActionable comments posted:\s*0\b/i;
 const NO_ACTIONABLE_REGEX = /\bNo actionable comments were generated\b/i;
 
 const REVIEWS_AVAILABLE_REGEX = /\bReviews are available now\b/i;
+const REPLY_NOTE_REGEX =
+  /^>?\s*Note:[^\n]*This command is applicable only when automatic reviews are paused\.?[^\n]*$/gim;
+const NON_STATUS_SECTION_REGEXES: RegExp[] = [
+  /<!--\s*walkthrough_start\s*-->[\s\S]*?<!--\s*walkthrough_end\s*-->/gi,
+  /<!--\s*pre_merge_checks_walkthrough_start\s*-->[\s\S]*?<!--\s*pre_merge_checks_walkthrough_end\s*-->/gi,
+  /<!--\s*tips_start\s*-->[\s\S]*?<!--\s*tips_end\s*-->/gi,
+];
 const RATE_LIMIT_OR_SKIP_PATTERNS: RegExp[] = [
   /\bReview rate limited\b/i,
   /\brate limit(?:ing)?\s+(?:exceeded|reached|hit)\b/i,
@@ -52,11 +59,20 @@ export function extractEmbeddedCommitSha(body: string): string | undefined {
   return match?.[1];
 }
 
+function stripNonStatusSections(body: string): string {
+  let cleaned = body.replace(REPLY_NOTE_REGEX, '');
+  for (const sectionRegex of NON_STATUS_SECTION_REGEXES) {
+    cleaned = cleaned.replace(sectionRegex, '');
+  }
+  return cleaned;
+}
+
 function isRateLimitedOrSkippedText(body: string): boolean {
-  if (REVIEWS_AVAILABLE_REGEX.test(body)) {
+  const cleaned = stripNonStatusSections(body);
+  if (REVIEWS_AVAILABLE_REGEX.test(cleaned)) {
     return false;
   }
-  return RATE_LIMIT_OR_SKIP_PATTERNS.some((pattern) => pattern.test(body));
+  return RATE_LIMIT_OR_SKIP_PATTERNS.some((pattern) => pattern.test(cleaned));
 }
 
 function evaluateCheckRun(payload: WebhookPayload): EvaluationResult {
