@@ -154,6 +154,14 @@ jobs:
 
 ---
 
+## 📦 Releasing & Tagging
+
+1. Merge changes to `main` (ensuring `npm run build` has updated `dist/`).
+2. Create and publish a GitHub Release on an immutable SemVer tag (e.g., `v1.0.0`), optionally checking **Publish this Action to the GitHub Marketplace**.
+3. [Update Major Release Tag](.github/workflows/release-major-tag.yml) automatically advances the floating major tag (e.g., `v1`) to point to the released commit.
+
+---
+
 ## ⚖️ Disclaimer
 
 This is an independent community open-source project and is not affiliated with, sponsored by, or endorsed by CodeRabbit, Inc. or GitHub, Inc.

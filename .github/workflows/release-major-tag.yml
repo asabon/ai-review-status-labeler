@@ -1,0 +1,32 @@
+name: Update Major Release Tag
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update-major-tag:
+    # Only move floating major tags (e.g., v1) for stable SemVer tags (vX.Y.Z).
+    if: ${{ !github.event.release.prerelease && !github.event.release.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update floating major version tag
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$TAG_NAME" =~ ^v([0-9]+)\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Skipping non-stable SemVer tag: $TAG_NAME"
+            exit 0
+          fi
+          MAJOR_TAG="v${BASH_REMATCH[1]}"
+          echo "Updating $MAJOR_TAG -> $TAG_NAME"
+          git tag -f "$MAJOR_TAG" "$TAG_NAME^{commit}"
+          git push origin "refs/tags/${MAJOR_TAG}" --force
