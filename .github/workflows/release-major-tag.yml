@@ -2,10 +2,14 @@ name: Update Major Release Tag
 
 on:
   release:
-    types: [published]
+    types: [released]
 
 permissions:
   contents: write
+
+concurrency:
+  group: update-major-release-tag
+  cancel-in-progress: false
 
 jobs:
   update-major-tag:
@@ -14,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -26,7 +30,31 @@ jobs:
             echo "Skipping non-stable SemVer tag: $TAG_NAME"
             exit 0
           fi
-          MAJOR_TAG="v${BASH_REMATCH[1]}"
-          echo "Updating $MAJOR_TAG -> $TAG_NAME"
-          git tag -f "$MAJOR_TAG" "$TAG_NAME^{commit}"
-          git push origin "refs/tags/${MAJOR_TAG}" --force
+
+          MAJOR="${BASH_REMATCH[1]}"
+          MAJOR_TAG="v${MAJOR}"
+
+          git fetch --tags --force
+
+          LATEST_TAG=$(git tag -l "v${MAJOR}.*" | grep -E "^v${MAJOR}\.[0-9]+\.[0-9]+$" | sort -V | tail -n 1 || true)
+          if [[ -n "$LATEST_TAG" && "$LATEST_TAG" != "$TAG_NAME" ]]; then
+            echo "Skipping ${MAJOR_TAG} update: ${TAG_NAME} is older than latest stable tag ${LATEST_TAG}"
+            exit 0
+          fi
+
+          OLD_OID=$(git rev-parse --verify --quiet "refs/tags/${MAJOR_TAG}" || true)
+          TARGET_COMMIT=$(git rev-parse "${TAG_NAME}^{commit}")
+
+          if [[ -n "$OLD_OID" && "$OLD_OID" == "$TARGET_COMMIT" ]]; then
+            echo "${MAJOR_TAG} already points to ${TARGET_COMMIT}"
+            exit 0
+          fi
+
+          echo "Updating ${MAJOR_TAG} -> ${TAG_NAME} (${TARGET_COMMIT})"
+          git tag -f "$MAJOR_TAG" "$TARGET_COMMIT"
+
+          if [[ -n "$OLD_OID" ]]; then
+            git push origin "refs/tags/${MAJOR_TAG}" --force-with-lease="refs/tags/${MAJOR_TAG}:${OLD_OID}"
+          else
+            git push origin "refs/tags/${MAJOR_TAG}" --force-with-lease="refs/tags/${MAJOR_TAG}:"
+          fi
