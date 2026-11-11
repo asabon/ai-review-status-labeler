@@ -1,0 +1,45 @@
+name: 'AI Review Status Labeler'
+description: 'Synchronize PR status labels based on AI code review results (e.g., CodeRabbit).'
+author: 'asabon'
+branding:
+  icon: 'tag'
+  color: 'blue'
+
+inputs:
+  github-token:
+    description: 'GitHub token for Octokit API operations'
+    required: true
+    default: ${{ github.token }}
+  provider:
+    description: 'AI review tool provider (default: coderabbit)'
+    required: false
+    default: 'coderabbit'
+  label-skipped:
+    description: 'Label to assign when review is skipped or throttled'
+    required: false
+    default: 'ai: skipped'
+  label-actionable:
+    description: 'Label to assign when actionable comments are found'
+    required: false
+    default: 'ai: changes-requested'
+  label-approved:
+    description: 'Label to assign when review passes with no issues'
+    required: false
+    default: 'ai: approved'
+  auto-create-labels:
+    description: 'Automatically create missing labels in the repository'
+    required: false
+    default: 'true'
+
+outputs:
+  status:
+    description: 'Resolved action status (skipped, changes-requested, approved, cleared, or ignored)'
+  label:
+    description: 'Label applied to the pull request, or empty when cleared or ignored'
+  pr-number:
+    description: 'Target pull request number, or empty if not resolved'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
+

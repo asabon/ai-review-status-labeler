@@ -1,0 +1,31 @@
+{
+  "name": "ai-review-status-labeler",
+  "version": "1.0.0",
+  "description": "A GitHub Action that inspects AI code review results and synchronizes pull request status labels.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/index.ts -o dist --source-map --license licenses.txt",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "github-actions",
+    "code-review",
+    "coderabbit",
+    "labels",
+    "pull-request"
+  ],
+  "author": "asabon",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@vercel/ncc": "^0.38.3",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
