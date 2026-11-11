@@ -10,6 +10,7 @@ permissions:
 concurrency:
   group: update-major-release-tag
   cancel-in-progress: false
+  queue: max
 
 jobs:
   update-major-tag:
