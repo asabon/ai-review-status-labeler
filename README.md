@@ -65,9 +65,23 @@ jobs:
     steps:
       - name: Sync AI Review Status
         uses: asabon/ai-review-status-labeler@v1
+```
+
+> [!TIP]
+> **Zero configuration for CodeRabbit:**
+> `provider` defaults to `'coderabbit'` and `github-token` defaults to `${{ github.token }}`, so standard CodeRabbit setups do not need any `with:` inputs.
+
+### Custom Labels (Optional)
+
+If you prefer custom label names, provide them via `with:`:
+
+```yaml
+      - name: Sync AI Review Status
+        uses: asabon/ai-review-status-labeler@v1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          provider: 'coderabbit'
+          label-approved: 'ai/approved'
+          label-actionable: 'ai/changes-requested'
+          label-skipped: 'ai/skipped'
 ```
 
 > [!NOTE]
