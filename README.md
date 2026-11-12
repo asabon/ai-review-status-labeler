@@ -1,104 +1,39 @@
 # AI Review Status Labeler (`ai-review-status-labeler`)
 
-A GitHub Action that automatically inspects AI code review results (e.g., CodeRabbit) and synchronizes pull request labels to reflect actionable comments, clean reviews, or skipped evaluations due to rate limits.
+[![CI](https://github.com/asabon/ai-review-status-labeler/actions/workflows/ci.yml/badge.svg)](https://github.com/asabon/ai-review-status-labeler/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js 24](https://img.shields.io/badge/node-24-339933.svg?logo=node.js&logoColor=white)](action.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6.svg?logo=typescript&logoColor=white)](tsconfig.json)
+
+A GitHub Action that inspects AI code review results (e.g., CodeRabbit) and synchronizes mutually exclusive status labels on pull requests so you can see at a glance which PRs were skipped due to rate limits, require changes, or passed AI review.
 
 ---
 
-## 🎯 Motivation & Purpose
+## ✨ Features & Safeguards
 
-When managing multiple repositories simultaneously with AI reviewers like CodeRabbit:
-1. **Hidden Rate Limits:** Reviews skipped due to rolling-window quotas (e.g., free tier limits) fail quietly via check runs or comment warnings, leaving PRs unnoticed in an unreviewed state.
-2. **Review Visibility:** It is difficult to distinguish at a glance which PRs require developer fixes versus those that have already passed AI inspection.
-3. **Multi-Repo Friction:** Checking the CodeRabbit web dashboard or running `@coderabbitai rate limits` across several repositories introduces cognitive context-switching.
-
-This Action bridges that gap by parsing webhook payloads (`issue_comment`, `check_run`, etc.) and dynamically toggling exclusive status labels on PRs.
-
----
-
-## 🏷️ Target State & Label Lifecycle
-
-The Action manages a mutually exclusive set of status labels per PR:
-
-| State | Default Label | Trigger Condition (CodeRabbit) |
-| :--- | :--- | :--- |
-| **Review Skipped / Throttled** | `ai: skipped` (or `レビュー未実施`) | Check run conclusion is not success, or comment text indicates rate limiting (e.g., `rate limit`). |
-| **Actionable Findings** | `ai: changes-requested` (or `指摘あり`) | Review summary contains actionable feedback, changes requested, or inline critique comments. |
-| **Review Approved / Clean** | `ai: approved` (or `レビューOK`) | Review completes with no actionable issues found, or summarizes changes as acceptable. |
-
-*When moving between states, previously applied status labels managed by this action are automatically removed.*
+- **Mutually Exclusive Status Labels:** Automatically removes stale managed labels before applying the newly resolved label.
+- **Rate-Limit & Skip Detection:** Surfaces quiet skips (e.g., `check_run` `skipped`/non-success conclusions, `< 10 stars` skip banners, or `Review rate limited.` replies) without false-positiving on informational replies like `@coderabbitai rate limits` (`Reviews are available now.`).
+- **Race-Condition Safe:** Defers `approved` / `changes-requested` verdicts to review and summary comment events so a `check_run` (`success`) never overwrites actionable review findings.
+- **Outdated-Commit Guard:** Verifies `check_run.head_sha`, `review.commit_id`, and embedded CodeRabbit commit metadata against the PR's current `head.sha` to ignore delayed results from superseded commits.
+- **Stale Label Cleanup on Push:** Supports `pull_request` / `pull_request_target` (`synchronize`) to clear old status labels when new commits are pushed.
+- **Auto-Create Missing Labels:** Creates missing status labels with default colors and descriptions while preserving any user-customized colors or descriptions on existing labels.
+- **Fork PR Friendly:** Gracefully logs a warning and exits cleanly if a fork PR's `pull_request (synchronize)` event runs with a read-only `GITHUB_TOKEN` (`403`), while `issue_comment`, `pull_request_review`, and `check_run` continue to synchronize labels normally.
 
 ---
 
-## 📋 Requirements & Scope
+## 🏷️ Status Labels
 
-### 1. Core Functional Requirements
-- **Payload Parsing:**
-  - Support `check_run` (`completed`) events from AI review apps (`coderabbitai`).
-  - Support `issue_comment` (`created`, `edited`) and `pull_request_review` (`submitted`) events from AI reviewer bots (e.g., `coderabbitai[bot]`).
-  - Support `pull_request` / `pull_request_target` (`synchronize`) to clear stale status labels when new commits are pushed.
-- **Resilient Matching & Race-Condition Guards:**
-  - Combine structured marker checks and regex patterns in the provider adapter (avoiding false positives such as `@coderabbitai rate limits` status replies).
-  - Defer `approved` / `changes-requested` verdicts to review/comment events so a `check_run` (`success`) never overwrites actionable review findings.
-  - Verify commit SHAs (`check_run.head_sha`, `review.commit_id`, and embedded CodeRabbit commit metadata) against the PR's current `head.sha` to ignore delayed results for superseded commits.
-  - Fall back to commit-associated PR lookup when `check_run.pull_requests` is empty.
-- **Label Management:**
-  - Remove existing managed labels before applying the newly resolved label.
-  - Optionally auto-create labels in the repository if they do not yet exist (with default colors/descriptions, preserving any user-customized colors/descriptions on existing labels).
-  - On fork PR `pull_request (synchronize)` events where `GITHUB_TOKEN` is read-only (`403`), emit a warning and exit cleanly instead of failing CI.
-- **Extensible Architecture:**
-  - Initially targeted for CodeRabbit (`coderabbit`), structured with a `ProviderAdapter` interface so adapters for other AI review bots (GitHub Copilot PR Review, Qodo Merge, etc.) can be plugged in.
-
-### 2. Technical Stack & Implementation Guidelines
-- **Type:** TypeScript Action (`node20`) compiled via `@vercel/ncc` (`dist/index.js`), tested with Vitest.
-- **Dependencies:** `@actions/core`, `@actions/github`.
-- **Permissions Required:**
-  - `pull-requests: write`
-  - `issues: write`
-  - `checks: read`
+| State | Default Label | Default Color | When Applied (`coderabbit`) |
+| :--- | :--- | :--- | :--- |
+| **Skipped / Throttled** | `ai: skipped` | `#fbca04` | `check_run` concludes with non-`success` (e.g., `skipped`, `failure`), summary comment shows an active skip banner, or reply indicates rate limiting (`Review rate limited.`). |
+| **Actionable Findings** | `ai: changes-requested` | `#d93f0b` | `pull_request_review` has state `changes_requested` or `Actionable comments posted: N` (`N > 0`), or review summary reports actionable comments. |
+| **Approved / Clean** | `ai: approved` | `#0e8a16` | Review summary reports `No actionable comments were generated` / `Actionable comments posted: 0`, or `pull_request_review` has state `approved`. |
 
 ---
 
-## ⚙️ Action Interface (`action.yml`)
+## 🚀 Quick Start
 
-```yaml
-inputs:
-  github-token:
-    description: 'GitHub token for Octokit API operations'
-    required: true
-    default: ${{ github.token }}
-  provider:
-    description: 'AI review tool provider (default: coderabbit)'
-    required: false
-    default: 'coderabbit'
-  label-skipped:
-    description: 'Label to assign when review is skipped or throttled'
-    required: false
-    default: 'ai: skipped'
-  label-actionable:
-    description: 'Label to assign when actionable comments are found'
-    required: false
-    default: 'ai: changes-requested'
-  label-approved:
-    description: 'Label to assign when review passes with no issues'
-    required: false
-    default: 'ai: approved'
-  auto-create-labels:
-    description: 'Automatically create missing labels in the repository'
-    required: false
-    default: 'true'
-
-outputs:
-  status:
-    description: 'Resolved action status (skipped, changes-requested, approved, cleared, or ignored)'
-  label:
-    description: 'Label applied to the pull request, or empty when cleared or ignored'
-  pr-number:
-    description: 'Target pull request number, or empty if not resolved'
-```
-
----
-
-## 🚀 Example Workflow Integration
+Create `.github/workflows/ai-review-status.yml` in your repository:
 
 ```yaml
 name: AI Review Status Sync
@@ -121,7 +56,6 @@ permissions:
 
 jobs:
   label-sync:
-    # Restrict execution to relevant AI review events or new commits
     if: >
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.login == 'coderabbitai[bot]') ||
       (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
@@ -134,34 +68,56 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           provider: 'coderabbit'
-          label-skipped: 'ai: skipped'
-          label-actionable: 'ai: changes-requested'
-          label-approved: 'ai: approved'
 ```
 
 > [!NOTE]
-> For fork PRs, `pull_request` (`synchronize`) runs with a read-only `GITHUB_TOKEN`, so stale label cleanup is skipped with a warning (while `issue_comment`, `pull_request_review`, and `check_run` still run with write permissions). If you also want stale labels cleared on fork PR pushes, use `pull_request_target` (`types: [synchronize]`) in a dedicated job that does **not** check out or execute untrusted PR code.
+> For fork PRs, `pull_request` (`synchronize`) receives a read-only `GITHUB_TOKEN`, so stale label cleanup is skipped with a warning (while `issue_comment`, `pull_request_review`, and `check_run` still run with write permissions). If you also want stale labels cleared when external contributors push to fork PRs, handle `pull_request_target` (`types: [synchronize]`) in a dedicated job that does **not** check out or execute untrusted PR code.
+
+### Required Permissions
+
+| Permission | Reason |
+| :--- | :--- |
+| `pull-requests: write` | Read PR head SHA / labels and add or remove status labels |
+| `issues: write` | Create missing repository labels and manage issue/PR labels |
+| `checks: read` | Read `check_run` event metadata and associated commits |
 
 ---
 
-## 🛠️ Development Milestones
+## ⚙️ Inputs & Outputs
 
-- [x] **Phase 1 (Mock & Test):** Collect sample event payloads (`check_run`, `issue_comment`, `pull_request_review`) for CodeRabbit (rate limit / skip, review with issues, clean review).
-- [x] **Phase 2 (Parser Engine):** Implement provider adapter (`CodeRabbitProvider`) with structured marker & regex matching and commit SHA staleness checks.
-- [x] **Phase 3 (Label Engine):** Implement Octokit routines to swap managed labels, auto-create missing labels, and clear stale labels on `synchronize`.
-- [ ] **Phase 4 (Packaging & Live Verification):** Bundle action code via `@vercel/ncc` (`dist/index.js` built) and verify against live pull requests.
-- [ ] **Phase 5 (Marketplace Ready):** Finalize documentation, verify CI/test suite, and publish to GitHub Marketplace (`MIT` license and `action.yml` branding configured).
+### Inputs
+
+| Input | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `github-token` | Yes | `${{ github.token }}` | GitHub token used for Octokit REST API operations. |
+| `provider` | No | `'coderabbit'` | AI review tool provider (`coderabbit`). |
+| `label-skipped` | No | `'ai: skipped'` | Label to assign when review is skipped or throttled. |
+| `label-actionable` | No | `'ai: changes-requested'` | Label to assign when actionable comments are found. |
+| `label-approved` | No | `'ai: approved'` | Label to assign when review passes with no actionable issues. |
+| `auto-create-labels` | No | `'true'` | Automatically create missing labels in the repository (`'true'` / `'false'`). Existing labels keep their current colors and descriptions. |
+
+### Outputs
+
+| Output | Description |
+| :--- | :--- |
+| `status` | Resolved status (`skipped`, `changes-requested`, `approved`, `cleared`, or `ignored`). |
+| `label` | Label applied to the pull request, or empty string when `cleared` or `ignored`. |
+| `pr-number` | Target pull request number, or empty string if not resolved. |
 
 ---
 
-## 📦 Releasing & Tagging
+## 🔌 Supported Providers
 
-1. Merge changes to `main` (ensuring `npm run build` has updated `dist/`).
-2. Create and publish a GitHub Release on an immutable SemVer tag (e.g., `v1.0.0`), optionally checking **Publish this Action to the GitHub Marketplace**.
-3. [Update Major Release Tag](.github/workflows/release-major-tag.yml) automatically advances the floating major tag (e.g., `v1`) to point to the released commit.
+| Provider | `provider` value | Supported Events |
+| :--- | :--- | :--- |
+| **CodeRabbit** | `coderabbit` | `check_run` (`completed`), `issue_comment` (`created`, `edited`), `pull_request_review` (`submitted`) |
+
+Additional adapters can be added via [`ProviderAdapter`](src/types.ts). See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ---
 
-## ⚖️ Disclaimer
+## 📄 License & Disclaimer
+
+Released under the [MIT License](LICENSE).
 
 This is an independent community open-source project and is not affiliated with, sponsored by, or endorsed by CodeRabbit, Inc. or GitHub, Inc.

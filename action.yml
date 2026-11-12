@@ -40,6 +40,6 @@ outputs:
     description: 'Target pull request number, or empty if not resolved'
 
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'dist/index.js'
 

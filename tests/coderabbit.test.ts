@@ -242,7 +242,7 @@ describe('CodeRabbitProvider issue_comment events', () => {
     expect(provider.evaluate('issue_comment', payload).kind).toBe('ignored');
   });
 
-  it('marks "Review rate limited." reply as skipped', () => {
+  it('marks "Review rate limited." reply as skipped even with standard paused-note footer', () => {
     const payload: WebhookPayload = {
       action: 'created',
       issue: { number: 21, pull_request: {} },
@@ -252,6 +252,8 @@ describe('CodeRabbitProvider issue_comment events', () => {
           '<!-- This is an auto-generated reply by CodeRabbit -->',
           '<details><summary>⚠️ Action not completed</summary>',
           'Review rate limited.',
+          '',
+          '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused.',
           '</details>',
         ].join('\n'),
       },
@@ -281,13 +283,46 @@ describe('CodeRabbitProvider issue_comment events', () => {
     expect(provider.evaluate('issue_comment', payload).kind).toBe('ignored');
   });
 
-  it('ignores plain command acknowledgements like "Review finished."', () => {
+  it('ignores "Review finished." command reply containing the standard automatic-reviews-paused note', () => {
     const payload: WebhookPayload = {
-      action: 'created',
-      issue: { number: 30, pull_request: {} },
+      action: 'edited',
+      issue: { number: 3, pull_request: {} },
       comment: {
         user: { login: 'coderabbitai[bot]' },
-        body: '<!-- This is an auto-generated reply by CodeRabbit -->\nReview finished.',
+        body: [
+          '<!-- coderabbit-ai-generated:v1 -->',
+          '<!-- This is an auto-generated reply by CodeRabbit -->',
+          '<details>',
+          '<summary>Action performed</summary>',
+          '',
+          'Review finished.',
+          '',
+          '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused.',
+          '',
+          '</details>',
+        ].join('\n'),
+      },
+    };
+
+    expect(provider.evaluate('issue_comment', payload).kind).toBe('ignored');
+  });
+
+  it('ignores walkthrough and pre-merge check text mentioning skipped or rate limit', () => {
+    const payload: WebhookPayload = {
+      action: 'edited',
+      issue: { number: 3, pull_request: {} },
+      comment: {
+        user: { login: 'coderabbitai[bot]' },
+        body: [
+          '<!-- coderabbit-ai-generated:v1 -->',
+          '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->',
+          '<!-- walkthrough_start -->',
+          'Adds handling when review is skipped due to rate limit.',
+          '<!-- walkthrough_end -->',
+          '<!-- pre_merge_checks_walkthrough_start -->',
+          '| Check skipped - rate limit test |',
+          '<!-- pre_merge_checks_walkthrough_end -->',
+        ].join('\n'),
       },
     };
 
