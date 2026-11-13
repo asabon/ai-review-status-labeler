@@ -27,6 +27,3 @@ jobs:
     steps:
       - name: Sync AI Review Status
         uses: asabon/ai-review-status-labeler@main
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          provider: 'coderabbit'
