@@ -30592,6 +30592,14 @@ async function resolvePullRequest(octokit, owner, repo, eventName, payload) {
     }
     return undefined;
 }
+async function fetchLiveHeadSha(octokit, owner, repo, prNumber) {
+    const { data: prData } = await octokit.rest.pulls.get({
+        owner,
+        repo,
+        pull_number: prNumber,
+    });
+    return prData.head.sha;
+}
 async function runAction(params) {
     const { eventName, payload, inputs } = params;
     const owner = payload.repository?.owner?.login;
@@ -30647,14 +30655,13 @@ async function runAction(params) {
         return { status: 'ignored', label: '' };
     }
     const targetCommitSha = evaluation.kind === 'matched' ? evaluation.targetCommitSha : fallbackCheck?.targetCommitSha;
-    let currentHeadSha = pr.headSha;
-    if ((targetCommitSha || evaluation.kind === 'ignored') && !currentHeadSha) {
-        const { data: prData } = await octokit.rest.pulls.get({
-            owner,
-            repo,
-            pull_number: pr.number,
-        });
-        currentHeadSha = prData.head.sha;
+    // Fallback paths cannot trust the event snapshot's head SHA (a commit may have
+    // been pushed since the check_run/comment event fired), so always fetch live.
+    let currentHeadSha = evaluation.kind === 'ignored'
+        ? await fetchLiveHeadSha(octokit, owner, repo, pr.number)
+        : pr.headSha;
+    if (targetCommitSha && !currentHeadSha) {
+        currentHeadSha = await fetchLiveHeadSha(octokit, owner, repo, pr.number);
     }
     if (targetCommitSha && currentHeadSha && !(0, utils_js_1.commitShasMatch)(targetCommitSha, currentHeadSha)) {
         core.info(`Ignoring outdated ${eventName} result for commit ${targetCommitSha} (PR #${pr.number} head is ${currentHeadSha})`);
@@ -30673,6 +30680,13 @@ async function runAction(params) {
         if (evaluation.kind === 'ignored') {
             core.info(evaluation.reason);
             return { status: 'ignored', label: '', prNumber: pr.number };
+        }
+        if (evaluation.targetCommitSha) {
+            const liveHeadSha = await fetchLiveHeadSha(octokit, owner, repo, pr.number);
+            if (!(0, utils_js_1.commitShasMatch)(evaluation.targetCommitSha, liveHeadSha)) {
+                core.info(`Ignoring outdated fallback review for commit ${evaluation.targetCommitSha} (PR #${pr.number} head is ${liveHeadSha})`);
+                return { status: 'ignored', label: '', prNumber: pr.number };
+            }
         }
     }
     const appliedLabel = await (0, labels_js_1.syncStatusLabels)({

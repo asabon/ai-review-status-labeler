@@ -524,4 +524,98 @@ describe('runAction', () => {
     expect(outcome).toEqual({ status: 'ignored', label: '', prNumber: 6 });
     expect(mock.rest.pulls.listReviews).not.toHaveBeenCalled();
   });
+
+  it('uses live PR head instead of stale check_run.pull_requests snapshot on fallback', async () => {
+    const mock = createMockOctokit({
+      prLabels: ['ai: skipped'],
+      prHeadSha: 'newer-live-head-sha',
+      reviews: [
+        {
+          user: { login: 'coderabbitai[bot]' },
+          state: 'COMMENTED',
+          commit_id: 'older-snapshot-sha',
+          submitted_at: '2026-11-16T22:35:25Z',
+          body: 'No actionable comments were generated in the recent review.',
+        },
+      ],
+    });
+
+    const payload: WebhookPayload = {
+      action: 'completed',
+      repository: { owner: { login: 'asabon' }, name: 'vajra' },
+      check_run: {
+        conclusion: 'success',
+        head_sha: 'older-snapshot-sha',
+        app: { slug: 'coderabbitai' },
+        pull_requests: [{ number: 6, head: { sha: 'older-snapshot-sha' } }],
+      },
+    };
+
+    const outcome = await runAction({
+      eventName: 'check_run',
+      payload,
+      inputs: makeInputs(),
+      octokit: mock.octokit,
+    });
+
+    expect(outcome).toEqual({ status: 'ignored', label: '', prNumber: 6 });
+    expect(mock.rest.pulls.get).toHaveBeenCalledTimes(1);
+    expect(mock.rest.pulls.listReviews).not.toHaveBeenCalled();
+    expect(mock.getPrLabels()).toEqual(['ai: skipped']);
+  });
+
+  it('ignores fallback review if live PR head advances during listReviews', async () => {
+    const mock = createMockOctokit({
+      existingRepoLabels: ['ai: approved'],
+      prLabels: [],
+      prHeadSha: 'head-sha-a',
+      reviews: [
+        {
+          user: { login: 'coderabbitai[bot]' },
+          state: 'COMMENTED',
+          commit_id: 'head-sha-a',
+          submitted_at: '2026-11-16T22:35:25Z',
+          body: 'No actionable comments were generated in the recent review.',
+        },
+      ],
+    });
+
+    mock.rest.pulls.get
+      .mockResolvedValueOnce({
+        data: {
+          number: 6,
+          head: { sha: 'head-sha-a' },
+          labels: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          number: 6,
+          head: { sha: 'head-sha-b' },
+          labels: [],
+        },
+      });
+
+    const payload: WebhookPayload = {
+      action: 'completed',
+      repository: { owner: { login: 'asabon' }, name: 'vajra' },
+      check_run: {
+        conclusion: 'success',
+        head_sha: 'head-sha-a',
+        app: { slug: 'coderabbitai' },
+        pull_requests: [{ number: 6, head: { sha: 'head-sha-a' } }],
+      },
+    };
+
+    const outcome = await runAction({
+      eventName: 'check_run',
+      payload,
+      inputs: makeInputs(),
+      octokit: mock.octokit,
+    });
+
+    expect(outcome).toEqual({ status: 'ignored', label: '', prNumber: 6 });
+    expect(mock.rest.pulls.get).toHaveBeenCalledTimes(2);
+    expect(mock.getPrLabels()).toEqual([]);
+  });
 });
