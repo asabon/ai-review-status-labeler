@@ -3,6 +3,7 @@ import { getOctokit } from '@actions/github';
 import { clearManagedLabels, getHttpStatus, OctokitClient, syncStatusLabels } from './labels.js';
 import { getProvider } from './providers/index.js';
 import { ActionInputs, ActionStatus, WebhookPayload } from './types.js';
+import { commitShasMatch } from './utils.js';
 
 export interface RunOutcome {
   status: ActionStatus;
@@ -14,12 +15,6 @@ interface ResolvedPullRequest {
   number: number;
   headSha?: string;
   isFork?: boolean;
-}
-
-function commitShasMatch(expectedSha: string, actualSha: string): boolean {
-  const a = expectedSha.toLowerCase();
-  const b = actualSha.toLowerCase();
-  return a === b || a.startsWith(b) || b.startsWith(a);
 }
 
 async function resolvePullRequest(
@@ -127,11 +122,15 @@ export async function runAction(params: {
   }
 
   const provider = getProvider(inputs.provider);
-  const evaluation = provider.evaluate(eventName, payload);
+  let evaluation = provider.evaluate(eventName, payload);
+  let fallbackCheck: { eligible: boolean; targetCommitSha?: string } | undefined;
 
   if (evaluation.kind === 'ignored') {
-    core.info(evaluation.reason);
-    return { status: 'ignored', label: '' };
+    fallbackCheck = provider.shouldAttemptFallback?.(eventName, payload);
+    if (!fallbackCheck?.eligible || !provider.evaluateFallback) {
+      core.info(evaluation.reason);
+      return { status: 'ignored', label: '' };
+    }
   }
 
   const pr = await resolvePullRequest(octokit, owner, repo, eventName, payload);
@@ -140,8 +139,11 @@ export async function runAction(params: {
     return { status: 'ignored', label: '' };
   }
 
+  const targetCommitSha =
+    evaluation.kind === 'matched' ? evaluation.targetCommitSha : fallbackCheck?.targetCommitSha;
+
   let currentHeadSha = pr.headSha;
-  if (evaluation.targetCommitSha && !currentHeadSha) {
+  if ((targetCommitSha || evaluation.kind === 'ignored') && !currentHeadSha) {
     const { data: prData } = await octokit.rest.pulls.get({
       owner,
       repo,
@@ -150,15 +152,28 @@ export async function runAction(params: {
     currentHeadSha = prData.head.sha;
   }
 
-  if (
-    evaluation.targetCommitSha &&
-    currentHeadSha &&
-    !commitShasMatch(evaluation.targetCommitSha, currentHeadSha)
-  ) {
+  if (targetCommitSha && currentHeadSha && !commitShasMatch(targetCommitSha, currentHeadSha)) {
     core.info(
-      `Ignoring outdated ${eventName} result for commit ${evaluation.targetCommitSha} (PR #${pr.number} head is ${currentHeadSha})`,
+      `Ignoring outdated ${eventName} result for commit ${targetCommitSha} (PR #${pr.number} head is ${currentHeadSha})`,
     );
     return { status: 'ignored', label: '', prNumber: pr.number };
+  }
+
+  if (evaluation.kind === 'ignored') {
+    evaluation = await provider.evaluateFallback!({
+      eventName,
+      payload,
+      octokit,
+      owner,
+      repo,
+      prNumber: pr.number,
+      headSha: currentHeadSha ?? '',
+    });
+
+    if (evaluation.kind === 'ignored') {
+      core.info(evaluation.reason);
+      return { status: 'ignored', label: '', prNumber: pr.number };
+    }
   }
 
   const appliedLabel = await syncStatusLabels({

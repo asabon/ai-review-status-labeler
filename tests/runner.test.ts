@@ -27,11 +27,20 @@ function makeInputs(overrides?: Partial<ActionInputs>): ActionInputs {
   };
 }
 
+interface MockReview {
+  user?: { login?: string } | null;
+  state?: string | null;
+  body?: string | null;
+  commit_id?: string | null;
+  submitted_at?: string | null;
+}
+
 interface MockOctokitOptions {
   existingRepoLabels?: string[];
   prLabels?: string[];
   prHeadSha?: string;
   associatedPrs?: Array<{ number: number; state: string; head: { sha: string; repo?: { fork?: boolean } } }>;
+  reviews?: MockReview[];
   removeLabelError?: unknown;
   createLabelError?: unknown;
 }
@@ -81,6 +90,9 @@ function createMockOctokit(options: MockOctokitOptions = {}) {
           head: { sha: options.prHeadSha ?? 'head-sha-1' },
           labels: prLabels.map((name) => ({ name })),
         },
+      })),
+      listReviews: vi.fn(async () => ({
+        data: options.reviews ?? [],
       })),
     },
     repos: {
@@ -349,5 +361,167 @@ describe('runAction', () => {
 
     expect(outcome).toEqual({ status: 'cleared', label: '', prNumber: 12 });
     expect(mock.getPrLabels()).toEqual(['bug']);
+  });
+
+  it('falls back to pulls.listReviews on check_run success when pull_request_review did not trigger', async () => {
+    const headSha = 'b68d5f7bb13d934290c27d28977fa61bb0181292';
+    const mock = createMockOctokit({
+      existingRepoLabels: ['ai: skipped', 'ai: changes-requested'],
+      prLabels: ['ai: skipped'],
+      prHeadSha: headSha,
+      reviews: [
+        {
+          user: { login: 'coderabbitai[bot]' },
+          state: 'COMMENTED',
+          commit_id: 'old-commit-sha',
+          submitted_at: '2026-11-16T21:00:00Z',
+          body: 'No actionable comments were generated in the recent review.',
+        },
+        {
+          user: { login: 'coderabbitai[bot]' },
+          state: 'COMMENTED',
+          commit_id: headSha,
+          submitted_at: '2026-11-16T22:35:25Z',
+          body: '<!-- coderabbit-ai-generated:v1 -->\n\n**Actionable comments posted: 9**',
+        },
+      ],
+    });
+
+    const payload: WebhookPayload = {
+      action: 'completed',
+      repository: { owner: { login: 'asabon' }, name: 'vajra' },
+      check_run: {
+        conclusion: 'success',
+        head_sha: headSha,
+        app: { slug: 'coderabbitai' },
+        pull_requests: [{ number: 6, head: { sha: headSha } }],
+      },
+    };
+
+    const outcome = await runAction({
+      eventName: 'check_run',
+      payload,
+      inputs: makeInputs(),
+      octokit: mock.octokit,
+    });
+
+    expect(outcome).toEqual({
+      status: 'changes-requested',
+      label: 'ai: changes-requested',
+      prNumber: 6,
+    });
+    expect(mock.getPrLabels()).toEqual(['ai: changes-requested']);
+    expect(mock.rest.pulls.listReviews).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to pulls.listReviews on reviewed summary issue_comment without inline verdict', async () => {
+    const headSha = 'b68d5f7bb13d934290c27d28977fa61bb0181292';
+    const mock = createMockOctokit({
+      existingRepoLabels: ['ai: skipped', 'ai: approved'],
+      prLabels: ['ai: skipped'],
+      prHeadSha: headSha,
+      reviews: [
+        {
+          user: { login: 'coderabbitai[bot]' },
+          state: 'COMMENTED',
+          commit_id: headSha,
+          submitted_at: '2026-11-16T22:35:25Z',
+          body: 'No actionable comments were generated in the recent review.',
+        },
+      ],
+    });
+
+    const payload: WebhookPayload = {
+      action: 'edited',
+      repository: { owner: { login: 'asabon' }, name: 'vajra' },
+      issue: { number: 6, pull_request: {} },
+      comment: {
+        user: { login: 'coderabbitai[bot]' },
+        body: [
+          '<!-- coderabbit-ai-generated:v1 -->',
+          `<!-- final_review_risk_coverage:{"sourceCommitId":"${headSha}","coveredCommitId":"${headSha}","kind":"reviewed"} -->`,
+        ].join('\n'),
+      },
+    };
+
+    const outcome = await runAction({
+      eventName: 'issue_comment',
+      payload,
+      inputs: makeInputs(),
+      octokit: mock.octokit,
+    });
+
+    expect(outcome).toEqual({
+      status: 'approved',
+      label: 'ai: approved',
+      prNumber: 6,
+    });
+    expect(mock.getPrLabels()).toEqual(['ai: approved']);
+  });
+
+  it('keeps check_run success ignored when no matching review exists for head commit', async () => {
+    const headSha = 'current-head-sha';
+    const mock = createMockOctokit({
+      prLabels: ['ai: skipped'],
+      prHeadSha: headSha,
+      reviews: [
+        {
+          user: { login: 'coderabbitai[bot]' },
+          state: 'COMMENTED',
+          commit_id: 'different-old-sha',
+          submitted_at: '2026-11-16T20:00:00Z',
+          body: '**Actionable comments posted: 3**',
+        },
+      ],
+    });
+
+    const payload: WebhookPayload = {
+      action: 'completed',
+      repository: { owner: { login: 'asabon' }, name: 'vajra' },
+      check_run: {
+        conclusion: 'success',
+        head_sha: headSha,
+        app: { slug: 'coderabbitai' },
+        pull_requests: [{ number: 6, head: { sha: headSha } }],
+      },
+    };
+
+    const outcome = await runAction({
+      eventName: 'check_run',
+      payload,
+      inputs: makeInputs(),
+      octokit: mock.octokit,
+    });
+
+    expect(outcome).toEqual({ status: 'ignored', label: '', prNumber: 6 });
+    expect(mock.getPrLabels()).toEqual(['ai: skipped']);
+  });
+
+  it('ignores outdated check_run success without querying pulls.listReviews', async () => {
+    const mock = createMockOctokit({
+      prLabels: ['ai: skipped'],
+      prHeadSha: 'newer-head-sha',
+    });
+
+    const payload: WebhookPayload = {
+      action: 'completed',
+      repository: { owner: { login: 'asabon' }, name: 'vajra' },
+      check_run: {
+        conclusion: 'success',
+        head_sha: 'older-head-sha',
+        app: { slug: 'coderabbitai' },
+        pull_requests: [{ number: 6, head: { sha: 'newer-head-sha' } }],
+      },
+    };
+
+    const outcome = await runAction({
+      eventName: 'check_run',
+      payload,
+      inputs: makeInputs(),
+      octokit: mock.octokit,
+    });
+
+    expect(outcome).toEqual({ status: 'ignored', label: '', prNumber: 6 });
+    expect(mock.rest.pulls.listReviews).not.toHaveBeenCalled();
   });
 });

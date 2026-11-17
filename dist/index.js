@@ -30145,13 +30145,14 @@ async function clearManagedLabels(params) {
 /***/ }),
 
 /***/ 3113:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.CodeRabbitProvider = void 0;
 exports.extractEmbeddedCommitSha = extractEmbeddedCommitSha;
+const utils_js_1 = __nccwpck_require__(1798);
 const CODERABBIT_APP_SLUG = 'coderabbitai';
 const CODERABBIT_BOT_LOGINS = new Set(['coderabbitai[bot]', 'coderabbitai']);
 const RECENT_REVIEW_STATUS_REGEX = /<!--\s*recent_review_status_start\s*-->([\s\S]*?)<!--\s*recent_review_status_end\s*-->/i;
@@ -30241,23 +30242,7 @@ function evaluateCheckRun(payload) {
         targetCommitSha: checkRun.head_sha,
     };
 }
-function evaluatePullRequestReview(payload) {
-    if (payload.action && payload.action !== 'submitted') {
-        return {
-            kind: 'ignored',
-            reason: `Ignoring pull_request_review action "${payload.action}"`,
-        };
-    }
-    const review = payload.review;
-    if (!review) {
-        return { kind: 'ignored', reason: 'Missing review payload' };
-    }
-    if (!isCodeRabbitBot(review.user?.login)) {
-        return {
-            kind: 'ignored',
-            reason: `Ignoring pull_request_review from "${review.user?.login ?? 'unknown'}"`,
-        };
-    }
+function evaluateReviewObject(review) {
     const state = review.state?.toLowerCase() ?? '';
     const body = review.body ?? '';
     const targetCommitSha = review.commit_id ?? undefined;
@@ -30291,6 +30276,25 @@ function evaluatePullRequestReview(payload) {
         kind: 'ignored',
         reason: 'CodeRabbit pull_request_review did not contain a recognized review verdict',
     };
+}
+function evaluatePullRequestReview(payload) {
+    if (payload.action && payload.action !== 'submitted') {
+        return {
+            kind: 'ignored',
+            reason: `Ignoring pull_request_review action "${payload.action}"`,
+        };
+    }
+    const review = payload.review;
+    if (!review) {
+        return { kind: 'ignored', reason: 'Missing review payload' };
+    }
+    if (!isCodeRabbitBot(review.user?.login)) {
+        return {
+            kind: 'ignored',
+            reason: `Ignoring pull_request_review from "${review.user?.login ?? 'unknown'}"`,
+        };
+    }
+    return evaluateReviewObject(review);
 }
 function evaluateIssueComment(payload) {
     if (payload.action && payload.action !== 'created' && payload.action !== 'edited') {
@@ -30395,6 +30399,84 @@ class CodeRabbitProvider {
                 };
         }
     }
+    /**
+     * When pull_request_review workflows cannot run (e.g., workflow only exists on
+     * the default branch while the PR targets another branch), check_run(success)
+     * and reviewed summary comments can still fall back to querying PR reviews.
+     */
+    shouldAttemptFallback(eventName, payload) {
+        if (eventName === 'check_run') {
+            if (payload.action && payload.action !== 'completed') {
+                return { eligible: false };
+            }
+            const checkRun = payload.check_run;
+            if (checkRun &&
+                checkRun.app?.slug?.toLowerCase() === CODERABBIT_APP_SLUG &&
+                checkRun.conclusion?.toLowerCase() === 'success') {
+                return {
+                    eligible: true,
+                    targetCommitSha: checkRun.head_sha,
+                };
+            }
+            return { eligible: false };
+        }
+        if (eventName === 'issue_comment') {
+            if (payload.action && payload.action !== 'created' && payload.action !== 'edited') {
+                return { eligible: false };
+            }
+            if (!payload.issue?.pull_request || !isCodeRabbitBot(payload.comment?.user?.login)) {
+                return { eligible: false };
+            }
+            const body = payload.comment?.body ?? '';
+            if (REVIEWED_COVERAGE_MARKER_REGEX.test(body)) {
+                return {
+                    eligible: true,
+                    targetCommitSha: extractEmbeddedCommitSha(body),
+                };
+            }
+            return { eligible: false };
+        }
+        return { eligible: false };
+    }
+    async evaluateFallback(context) {
+        const reviews = [];
+        for (let page = 1; page <= 10; page += 1) {
+            const { data } = await context.octokit.rest.pulls.listReviews({
+                owner: context.owner,
+                repo: context.repo,
+                pull_number: context.prNumber,
+                per_page: 100,
+                page,
+            });
+            reviews.push(...data);
+            if (data.length < 100) {
+                break;
+            }
+        }
+        const matchingReviews = reviews
+            .map((review, index) => ({ review, index }))
+            .filter(({ review }) => isCodeRabbitBot(review.user?.login) &&
+            Boolean(review.commit_id) &&
+            (0, utils_js_1.commitShasMatch)(review.commit_id, context.headSha))
+            .sort((a, b) => {
+            const timeA = a.review.submitted_at ? Date.parse(a.review.submitted_at) : Number.NaN;
+            const timeB = b.review.submitted_at ? Date.parse(b.review.submitted_at) : Number.NaN;
+            if (!Number.isNaN(timeA) && !Number.isNaN(timeB) && timeA !== timeB) {
+                return timeB - timeA;
+            }
+            return b.index - a.index;
+        });
+        for (const { review } of matchingReviews) {
+            const result = evaluateReviewObject(review);
+            if (result.kind === 'matched') {
+                return result;
+            }
+        }
+        return {
+            kind: 'ignored',
+            reason: 'No CodeRabbit pull_request_review with a recognized verdict found for current head commit',
+        };
+    }
 }
 exports.CodeRabbitProvider = CodeRabbitProvider;
 
@@ -30469,11 +30551,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const github_1 = __nccwpck_require__(3228);
 const labels_js_1 = __nccwpck_require__(4584);
 const index_js_1 = __nccwpck_require__(7486);
-function commitShasMatch(expectedSha, actualSha) {
-    const a = expectedSha.toLowerCase();
-    const b = actualSha.toLowerCase();
-    return a === b || a.startsWith(b) || b.startsWith(a);
-}
+const utils_js_1 = __nccwpck_require__(1798);
 async function resolvePullRequest(octokit, owner, repo, eventName, payload) {
     if (payload.pull_request?.number) {
         return {
@@ -30554,18 +30632,23 @@ async function runAction(params) {
         }
     }
     const provider = (0, index_js_1.getProvider)(inputs.provider);
-    const evaluation = provider.evaluate(eventName, payload);
+    let evaluation = provider.evaluate(eventName, payload);
+    let fallbackCheck;
     if (evaluation.kind === 'ignored') {
-        core.info(evaluation.reason);
-        return { status: 'ignored', label: '' };
+        fallbackCheck = provider.shouldAttemptFallback?.(eventName, payload);
+        if (!fallbackCheck?.eligible || !provider.evaluateFallback) {
+            core.info(evaluation.reason);
+            return { status: 'ignored', label: '' };
+        }
     }
     const pr = await resolvePullRequest(octokit, owner, repo, eventName, payload);
     if (!pr) {
         core.info(`No pull request associated with ${eventName} event; skipping`);
         return { status: 'ignored', label: '' };
     }
+    const targetCommitSha = evaluation.kind === 'matched' ? evaluation.targetCommitSha : fallbackCheck?.targetCommitSha;
     let currentHeadSha = pr.headSha;
-    if (evaluation.targetCommitSha && !currentHeadSha) {
+    if ((targetCommitSha || evaluation.kind === 'ignored') && !currentHeadSha) {
         const { data: prData } = await octokit.rest.pulls.get({
             owner,
             repo,
@@ -30573,11 +30656,24 @@ async function runAction(params) {
         });
         currentHeadSha = prData.head.sha;
     }
-    if (evaluation.targetCommitSha &&
-        currentHeadSha &&
-        !commitShasMatch(evaluation.targetCommitSha, currentHeadSha)) {
-        core.info(`Ignoring outdated ${eventName} result for commit ${evaluation.targetCommitSha} (PR #${pr.number} head is ${currentHeadSha})`);
+    if (targetCommitSha && currentHeadSha && !(0, utils_js_1.commitShasMatch)(targetCommitSha, currentHeadSha)) {
+        core.info(`Ignoring outdated ${eventName} result for commit ${targetCommitSha} (PR #${pr.number} head is ${currentHeadSha})`);
         return { status: 'ignored', label: '', prNumber: pr.number };
+    }
+    if (evaluation.kind === 'ignored') {
+        evaluation = await provider.evaluateFallback({
+            eventName,
+            payload,
+            octokit,
+            owner,
+            repo,
+            prNumber: pr.number,
+            headSha: currentHeadSha ?? '',
+        });
+        if (evaluation.kind === 'ignored') {
+            core.info(evaluation.reason);
+            return { status: 'ignored', label: '', prNumber: pr.number };
+        }
     }
     const appliedLabel = await (0, labels_js_1.syncStatusLabels)({
         octokit,
@@ -30594,6 +30690,25 @@ async function runAction(params) {
         label: appliedLabel,
         prNumber: pr.number,
     };
+}
+
+
+/***/ }),
+
+/***/ 1798:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.commitShasMatch = commitShasMatch;
+/**
+ * Compare two commit SHAs allowing abbreviated (7+ char) prefixes.
+ */
+function commitShasMatch(expectedSha, actualSha) {
+    const a = expectedSha.toLowerCase();
+    const b = actualSha.toLowerCase();
+    return a === b || a.startsWith(b) || b.startsWith(a);
 }
 
 
