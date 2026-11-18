@@ -18,6 +18,7 @@ function makeInputs(overrides?: Partial<ActionInputs>): ActionInputs {
     githubToken: 'test-token',
     provider: 'coderabbit',
     labels: {
+      'not-reviewed': 'ai: not-reviewed',
       skipped: 'ai: skipped',
       'changes-requested': 'ai: changes-requested',
       approved: 'ai: approved',
@@ -285,8 +286,9 @@ describe('runAction', () => {
     expect(mock.getPrLabels()).toEqual(['ai: changes-requested']);
   });
 
-  it('clears managed labels on pull_request synchronize', async () => {
+  it('transitions existing managed labels to not-reviewed on pull_request synchronize', async () => {
     const mock = createMockOctokit({
+      existingRepoLabels: ['ai: not-reviewed'],
       prLabels: ['enhancement', 'ai: approved'],
     });
 
@@ -306,12 +308,75 @@ describe('runAction', () => {
       octokit: mock.octokit,
     });
 
-    expect(outcome).toEqual({ status: 'cleared', label: '', prNumber: 10 });
+    expect(outcome).toEqual({
+      status: 'not-reviewed',
+      label: 'ai: not-reviewed',
+      prNumber: 10,
+    });
+    expect(mock.getPrLabels()).toEqual(['enhancement', 'ai: not-reviewed']);
+  });
+
+  it('ignores pull_request synchronize when PR has no managed AI labels', async () => {
+    const mock = createMockOctokit({
+      prLabels: ['enhancement'],
+    });
+
+    const payload: WebhookPayload = {
+      action: 'synchronize',
+      repository: { owner: { login: 'asabon' }, name: 'test-repo' },
+      pull_request: {
+        number: 13,
+        head: { sha: 'new-sha', repo: { fork: false } },
+      },
+    };
+
+    const outcome = await runAction({
+      eventName: 'pull_request',
+      payload,
+      inputs: makeInputs(),
+      octokit: mock.octokit,
+    });
+
+    expect(outcome).toEqual({ status: 'ignored', label: '', prNumber: 13 });
     expect(mock.getPrLabels()).toEqual(['enhancement']);
+    expect(mock.rest.issues.addLabels).not.toHaveBeenCalled();
+  });
+
+  it('keeps not-reviewed without redundant label writes on repeated synchronize', async () => {
+    const mock = createMockOctokit({
+      existingRepoLabels: ['ai: not-reviewed'],
+      prLabels: ['ai: not-reviewed', 'bug'],
+    });
+
+    const payload: WebhookPayload = {
+      action: 'synchronize',
+      repository: { owner: { login: 'asabon' }, name: 'test-repo' },
+      pull_request: {
+        number: 14,
+        head: { sha: 'new-sha', repo: { fork: false } },
+      },
+    };
+
+    const outcome = await runAction({
+      eventName: 'pull_request',
+      payload,
+      inputs: makeInputs(),
+      octokit: mock.octokit,
+    });
+
+    expect(outcome).toEqual({
+      status: 'not-reviewed',
+      label: 'ai: not-reviewed',
+      prNumber: 14,
+    });
+    expect(mock.getPrLabels()).toEqual(['ai: not-reviewed', 'bug']);
+    expect(mock.rest.issues.removeLabel).not.toHaveBeenCalled();
+    expect(mock.rest.issues.addLabels).not.toHaveBeenCalled();
   });
 
   it('warns and ignores 403 on fork PR pull_request synchronize', async () => {
     const mock = createMockOctokit({
+      existingRepoLabels: ['ai: not-reviewed'],
       prLabels: ['ai: approved'],
       removeLabelError: Object.assign(new Error('Resource not accessible by integration'), {
         status: 403,
@@ -338,8 +403,9 @@ describe('runAction', () => {
     expect(core.warning).toHaveBeenCalledTimes(1);
   });
 
-  it('clears managed labels on pull_request_target synchronize even for fork PRs', async () => {
+  it('transitions managed labels to not-reviewed on pull_request_target synchronize even for fork PRs', async () => {
     const mock = createMockOctokit({
+      existingRepoLabels: ['ai: not-reviewed'],
       prLabels: ['ai: changes-requested', 'bug'],
     });
 
@@ -359,8 +425,12 @@ describe('runAction', () => {
       octokit: mock.octokit,
     });
 
-    expect(outcome).toEqual({ status: 'cleared', label: '', prNumber: 12 });
-    expect(mock.getPrLabels()).toEqual(['bug']);
+    expect(outcome).toEqual({
+      status: 'not-reviewed',
+      label: 'ai: not-reviewed',
+      prNumber: 12,
+    });
+    expect(mock.getPrLabels()).toEqual(['bug', 'ai: not-reviewed']);
   });
 
   it('falls back to pulls.listReviews on check_run success when pull_request_review did not trigger', async () => {

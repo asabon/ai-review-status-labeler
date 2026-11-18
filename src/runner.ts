@@ -1,6 +1,11 @@
 import * as core from '@actions/core';
 import { getOctokit } from '@actions/github';
-import { clearManagedLabels, getHttpStatus, OctokitClient, syncStatusLabels } from './labels.js';
+import {
+  getHttpStatus,
+  markNotReviewedIfManaged,
+  OctokitClient,
+  syncStatusLabels,
+} from './labels.js';
 import { getProvider } from './providers/index.js';
 import { ActionInputs, ActionStatus, WebhookPayload } from './types.js';
 import { commitShasMatch } from './utils.js';
@@ -111,23 +116,25 @@ export async function runAction(params: {
     }
 
     try {
-      const removed = await clearManagedLabels({
+      const appliedLabel = await markNotReviewedIfManaged({
         octokit,
         owner,
         repo,
         issueNumber: pr.number,
         labels: inputs.labels,
+        autoCreateLabels: inputs.autoCreateLabels,
       });
-      core.info(
-        removed.length > 0
-          ? `Cleared stale AI review labels on PR #${pr.number}: ${removed.join(', ')}`
-          : `No AI review labels to clear on PR #${pr.number}`,
-      );
-      return { status: 'cleared', label: '', prNumber: pr.number };
+      if (!appliedLabel) {
+        core.info(`No AI review labels on PR #${pr.number}; leaving unlabeled`);
+        return { status: 'ignored', label: '', prNumber: pr.number };
+      }
+
+      core.info(`Transitioned AI review label on PR #${pr.number} to "${appliedLabel}" (not-reviewed)`);
+      return { status: 'not-reviewed', label: appliedLabel, prNumber: pr.number };
     } catch (error) {
       if (eventName === 'pull_request' && pr.isFork && getHttpStatus(error) === 403) {
         core.warning(
-          `Skipping label cleanup on fork PR #${pr.number} because GITHUB_TOKEN lacks write permission on pull_request events.`,
+          `Skipping label transition on fork PR #${pr.number} because GITHUB_TOKEN lacks write permission on pull_request events.`,
         );
         return { status: 'ignored', label: '', prNumber: pr.number };
       }

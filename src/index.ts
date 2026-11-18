@@ -8,6 +8,7 @@ function readInputs(): ActionInputs {
     githubToken: core.getInput('github-token', { required: true }),
     provider: core.getInput('provider') || 'coderabbit',
     labels: {
+      'not-reviewed': core.getInput('label-not-reviewed') || 'ai: not-reviewed',
       skipped: core.getInput('label-skipped') || 'ai: skipped',
       'changes-requested': core.getInput('label-actionable') || 'ai: changes-requested',
       approved: core.getInput('label-approved') || 'ai: approved',

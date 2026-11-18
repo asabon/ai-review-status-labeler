@@ -14,6 +14,10 @@ inputs:
     description: 'AI review tool provider (default: coderabbit)'
     required: false
     default: 'coderabbit'
+  label-not-reviewed:
+    description: 'Label to assign when a PR with an existing AI status label has new commits pushed'
+    required: false
+    default: 'ai: not-reviewed'
   label-skipped:
     description: 'Label to assign when review is skipped or throttled'
     required: false
@@ -33,9 +37,9 @@ inputs:
 
 outputs:
   status:
-    description: 'Resolved action status (skipped, changes-requested, approved, cleared, or ignored)'
+    description: 'Resolved action status (not-reviewed, skipped, changes-requested, approved, or ignored)'
   label:
-    description: 'Label applied to the pull request, or empty when cleared or ignored'
+    description: 'Label applied to the pull request, or empty when ignored'
   pr-number:
     description: 'Target pull request number, or empty if not resolved'
 

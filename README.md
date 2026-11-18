@@ -15,7 +15,7 @@ A GitHub Action that inspects AI code review results (e.g., CodeRabbit) and sync
 - **Rate-Limit & Skip Detection:** Surfaces quiet skips (e.g., `check_run` `skipped`/non-success conclusions, `< 10 stars` skip banners, or `Review rate limited.` replies) without false-positiving on informational replies like `@coderabbitai rate limits` (`Reviews are available now.`).
 - **Race-Condition Safe:** Defers `approved` / `changes-requested` verdicts to review and summary comment events so a `check_run` (`success`) never overwrites actionable review findings.
 - **Outdated-Commit Guard:** Verifies `check_run.head_sha`, `review.commit_id`, and embedded CodeRabbit commit metadata against the PR's current `head.sha` to ignore delayed results from superseded commits.
-- **Stale Label Cleanup on Push:** Supports `pull_request` / `pull_request_target` (`synchronize`) to clear old status labels when new commits are pushed.
+- **Stale Label Transition on Push:** Supports `pull_request` / `pull_request_target` (`synchronize`) to transition existing AI status labels to `ai: not-reviewed` when new commits are pushed, while leaving PRs without any AI status label untouched.
 - **Auto-Create Missing Labels:** Creates missing status labels with default colors and descriptions while preserving any user-customized colors or descriptions on existing labels.
 - **Fork PR Friendly:** Gracefully logs a warning and exits cleanly if a fork PR's `pull_request (synchronize)` event runs with a read-only `GITHUB_TOKEN` (`403`), while `issue_comment`, `pull_request_review`, and `check_run` continue to synchronize labels normally.
 
@@ -25,6 +25,7 @@ A GitHub Action that inspects AI code review results (e.g., CodeRabbit) and sync
 
 | State | Default Label | Default Color | When Applied (`coderabbit`) |
 | :--- | :--- | :--- | :--- |
+| **Not Reviewed** | `ai: not-reviewed` | `#cfd3d7` | `pull_request` / `pull_request_target` (`synchronize`) when the PR already has an AI status label (`ai: approved`, `ai: changes-requested`, `ai: skipped`, or `ai: not-reviewed`). PRs with no AI status label remain unlabeled. |
 | **Skipped / Throttled** | `ai: skipped` | `#fbca04` | `check_run` concludes with non-`success` (e.g., `skipped`, `failure`), summary comment shows an active skip banner, or reply indicates rate limiting (`Review rate limited.`). |
 | **Actionable Findings** | `ai: changes-requested` | `#d93f0b` | `pull_request_review` has state `changes_requested` or `Actionable comments posted: N` (`N > 0`), or review summary reports actionable comments. |
 | **Approved / Clean** | `ai: approved` | `#0e8a16` | Review summary reports `No actionable comments were generated` / `Actionable comments posted: 0`, or `pull_request_review` has state `approved`. |
@@ -82,10 +83,11 @@ If you prefer custom label names, provide them via `with:`:
           label-approved: 'ai/approved'
           label-actionable: 'ai/changes-requested'
           label-skipped: 'ai/skipped'
+          label-not-reviewed: 'ai/not-reviewed'
 ```
 
 > [!NOTE]
-> For fork PRs, `pull_request` (`synchronize`) receives a read-only `GITHUB_TOKEN`, so stale label cleanup is skipped with a warning (while `issue_comment`, `pull_request_review`, and `check_run` still run with write permissions). If you also want stale labels cleared when external contributors push to fork PRs, handle `pull_request_target` (`types: [synchronize]`) in a dedicated job that does **not** check out or execute untrusted PR code.
+> For fork PRs, `pull_request` (`synchronize`) receives a read-only `GITHUB_TOKEN`, so transitioning labels to `ai: not-reviewed` is skipped with a warning (while `issue_comment`, `pull_request_review`, and `check_run` still run with write permissions). If you also want stale labels transitioned when external contributors push to fork PRs, handle `pull_request_target` (`types: [synchronize]`) in a dedicated job that does **not** check out or execute untrusted PR code.
 
 ### Required Permissions
 
@@ -105,6 +107,7 @@ If you prefer custom label names, provide them via `with:`:
 | :--- | :--- | :--- | :--- |
 | `github-token` | Yes | `${{ github.token }}` | GitHub token used for Octokit REST API operations. |
 | `provider` | No | `'coderabbit'` | AI review tool provider (`coderabbit`). |
+| `label-not-reviewed` | No | `'ai: not-reviewed'` | Label to assign when a PR with an existing AI status label has new commits pushed. |
 | `label-skipped` | No | `'ai: skipped'` | Label to assign when review is skipped or throttled. |
 | `label-actionable` | No | `'ai: changes-requested'` | Label to assign when actionable comments are found. |
 | `label-approved` | No | `'ai: approved'` | Label to assign when review passes with no actionable issues. |
@@ -114,8 +117,8 @@ If you prefer custom label names, provide them via `with:`:
 
 | Output | Description |
 | :--- | :--- |
-| `status` | Resolved status (`skipped`, `changes-requested`, `approved`, `cleared`, or `ignored`). |
-| `label` | Label applied to the pull request, or empty string when `cleared` or `ignored`. |
+| `status` | Resolved status (`not-reviewed`, `skipped`, `changes-requested`, `approved`, or `ignored`). |
+| `label` | Label applied to the pull request, or empty string when `ignored`. |
 | `pr-number` | Target pull request number, or empty string if not resolved. |
 
 ---

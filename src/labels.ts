@@ -4,6 +4,10 @@ import { LabelDefinition, LabelMap, ReviewStatus } from './types.js';
 export type OctokitClient = ReturnType<typeof getOctokit>;
 
 const DEFAULT_LABEL_STYLES: Record<ReviewStatus, { color: string; description: string }> = {
+  'not-reviewed': {
+    color: 'cfd3d7',
+    description: 'PR has not been reviewed by AI for the latest commit',
+  },
   skipped: {
     color: 'fbca04',
     description: 'AI code review was skipped or throttled due to rate limits',
@@ -28,6 +32,10 @@ export function getHttpStatus(error: unknown): number | undefined {
 
 export function buildLabelDefinitions(labels: LabelMap): Record<ReviewStatus, LabelDefinition> {
   return {
+    'not-reviewed': {
+      name: labels['not-reviewed'],
+      ...DEFAULT_LABEL_STYLES['not-reviewed'],
+    },
     skipped: {
       name: labels.skipped,
       ...DEFAULT_LABEL_STYLES.skipped,
@@ -118,7 +126,7 @@ async function getCurrentLabelNames(
   return new Set(data.map((label) => label.name));
 }
 
-export async function syncStatusLabels(params: {
+async function applyTargetStatusLabel(params: {
   octokit: OctokitClient;
   owner: string;
   repo: string;
@@ -126,6 +134,7 @@ export async function syncStatusLabels(params: {
   targetStatus: ReviewStatus;
   labels: LabelMap;
   autoCreateLabels: boolean;
+  currentLabels: Set<string>;
 }): Promise<string> {
   const {
     octokit,
@@ -135,6 +144,7 @@ export async function syncStatusLabels(params: {
     targetStatus,
     labels,
     autoCreateLabels,
+    currentLabels,
   } = params;
 
   const definitions = buildLabelDefinitions(labels);
@@ -143,10 +153,6 @@ export async function syncStatusLabels(params: {
   if (autoCreateLabels) {
     await ensureLabelExists(octokit, owner, repo, targetDef);
   }
-
-  // Always fetch live labels instead of trusting the event payload snapshot,
-  // which can be stale when review/comment events fire close together.
-  const currentLabels = await getCurrentLabelNames(octokit, owner, repo, issueNumber);
 
   const managedNames = Array.from(new Set(Object.values(labels)));
   const labelsToRemove = managedNames.filter(
@@ -169,25 +175,56 @@ export async function syncStatusLabels(params: {
   return targetDef.name;
 }
 
-export async function clearManagedLabels(params: {
+export async function syncStatusLabels(params: {
+  octokit: OctokitClient;
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  targetStatus: ReviewStatus;
+  labels: LabelMap;
+  autoCreateLabels: boolean;
+}): Promise<string> {
+  const { octokit, owner, repo, issueNumber } = params;
+
+  // Always fetch live labels instead of trusting the event payload snapshot,
+  // which can be stale when review/comment events fire close together.
+  const currentLabels = await getCurrentLabelNames(octokit, owner, repo, issueNumber);
+
+  return applyTargetStatusLabel({
+    ...params,
+    currentLabels,
+  });
+}
+
+/**
+ * Transition an existing AI review status label to `not-reviewed` when new
+ * commits are pushed, leaving PRs without any managed label untouched.
+ */
+export async function markNotReviewedIfManaged(params: {
   octokit: OctokitClient;
   owner: string;
   repo: string;
   issueNumber: number;
   labels: LabelMap;
-}): Promise<string[]> {
-  const { octokit, owner, repo, issueNumber, labels } = params;
+  autoCreateLabels: boolean;
+}): Promise<string | undefined> {
+  const { octokit, owner, repo, issueNumber, labels, autoCreateLabels } = params;
   const currentLabels = await getCurrentLabelNames(octokit, owner, repo, issueNumber);
 
   const managedNames = Array.from(new Set(Object.values(labels)));
-  const removed: string[] = [];
-
-  for (const labelName of managedNames) {
-    if (currentLabels.has(labelName)) {
-      await removeLabelIfPresent(octokit, owner, repo, issueNumber, labelName);
-      removed.push(labelName);
-    }
+  const hasManagedLabel = managedNames.some((name) => currentLabels.has(name));
+  if (!hasManagedLabel) {
+    return undefined;
   }
 
-  return removed;
+  return applyTargetStatusLabel({
+    octokit,
+    owner,
+    repo,
+    issueNumber,
+    targetStatus: 'not-reviewed',
+    labels,
+    autoCreateLabels,
+    currentLabels,
+  });
 }
