@@ -374,6 +374,49 @@ describe('runAction', () => {
     expect(mock.rest.issues.addLabels).not.toHaveBeenCalled();
   });
 
+  it('preserves existing managed label if addLabels fails and completes transition on rerun', async () => {
+    const mock = createMockOctokit({
+      existingRepoLabels: ['ai: not-reviewed'],
+      prLabels: ['ai: approved', 'bug'],
+    });
+    mock.rest.issues.addLabels.mockRejectedValueOnce(new Error('Transient API error'));
+
+    const payload: WebhookPayload = {
+      action: 'synchronize',
+      repository: { owner: { login: 'asabon' }, name: 'test-repo' },
+      pull_request: {
+        number: 15,
+        head: { sha: 'new-sha', repo: { fork: false } },
+      },
+    };
+
+    await expect(
+      runAction({
+        eventName: 'pull_request',
+        payload,
+        inputs: makeInputs(),
+        octokit: mock.octokit,
+      }),
+    ).rejects.toThrow('Transient API error');
+
+    expect(mock.getPrLabels()).toEqual(['ai: approved', 'bug']);
+    expect(mock.rest.issues.removeLabel).not.toHaveBeenCalled();
+
+    const retryOutcome = await runAction({
+      eventName: 'pull_request',
+      payload,
+      inputs: makeInputs(),
+      octokit: mock.octokit,
+    });
+
+    expect(retryOutcome).toEqual({
+      status: 'not-reviewed',
+      label: 'ai: not-reviewed',
+      prNumber: 15,
+    });
+    expect(mock.getPrLabels()).toEqual(['bug', 'ai: not-reviewed']);
+  });
+
   it('warns and ignores 403 on fork PR pull_request synchronize', async () => {
     const mock = createMockOctokit({
       existingRepoLabels: ['ai: not-reviewed'],

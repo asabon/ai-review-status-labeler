@@ -154,15 +154,6 @@ async function applyTargetStatusLabel(params: {
     await ensureLabelExists(octokit, owner, repo, targetDef);
   }
 
-  const managedNames = Array.from(new Set(Object.values(labels)));
-  const labelsToRemove = managedNames.filter(
-    (name) => name !== targetDef.name && currentLabels.has(name),
-  );
-
-  for (const labelName of labelsToRemove) {
-    await removeLabelIfPresent(octokit, owner, repo, issueNumber, labelName);
-  }
-
   if (!currentLabels.has(targetDef.name)) {
     await octokit.rest.issues.addLabels({
       owner,
@@ -170,6 +161,15 @@ async function applyTargetStatusLabel(params: {
       issue_number: issueNumber,
       labels: [targetDef.name],
     });
+  }
+
+  const managedNames = Array.from(new Set(Object.values(labels)));
+  const labelsToRemove = managedNames.filter(
+    (name) => name !== targetDef.name && currentLabels.has(name),
+  );
+
+  for (const labelName of labelsToRemove) {
+    await removeLabelIfPresent(octokit, owner, repo, issueNumber, labelName);
   }
 
   return targetDef.name;
