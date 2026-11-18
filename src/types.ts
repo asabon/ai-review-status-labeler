@@ -1,3 +1,7 @@
+import type { getOctokit } from '@actions/github';
+
+export type OctokitClient = ReturnType<typeof getOctokit>;
+
 export type ReviewStatus = 'skipped' | 'changes-requested' | 'approved';
 
 export type ActionStatus = ReviewStatus | 'cleared' | 'ignored';
@@ -94,8 +98,25 @@ export interface WebhookPayload {
   };
 }
 
+export interface ProviderFallbackCheck {
+  eligible: boolean;
+  targetCommitSha?: string;
+}
+
+export interface ProviderFallbackContext {
+  eventName: string;
+  payload: WebhookPayload;
+  octokit: OctokitClient;
+  owner: string;
+  repo: string;
+  prNumber: number;
+  headSha: string;
+}
+
 export interface ProviderAdapter {
   readonly name: string;
   evaluate(eventName: string, payload: WebhookPayload): EvaluationResult;
+  shouldAttemptFallback?(eventName: string, payload: WebhookPayload): ProviderFallbackCheck;
+  evaluateFallback?(context: ProviderFallbackContext): Promise<EvaluationResult>;
 }
 

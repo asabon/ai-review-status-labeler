@@ -1,4 +1,11 @@
-import { EvaluationResult, ProviderAdapter, WebhookPayload } from '../types.js';
+import {
+  EvaluationResult,
+  ProviderAdapter,
+  ProviderFallbackCheck,
+  ProviderFallbackContext,
+  WebhookPayload,
+} from '../types.js';
+import { commitShasMatch } from '../utils.js';
 
 const CODERABBIT_APP_SLUG = 'coderabbitai';
 const CODERABBIT_BOT_LOGINS = new Set(['coderabbitai[bot]', 'coderabbitai']);
@@ -112,26 +119,11 @@ function evaluateCheckRun(payload: WebhookPayload): EvaluationResult {
   };
 }
 
-function evaluatePullRequestReview(payload: WebhookPayload): EvaluationResult {
-  if (payload.action && payload.action !== 'submitted') {
-    return {
-      kind: 'ignored',
-      reason: `Ignoring pull_request_review action "${payload.action}"`,
-    };
-  }
-
-  const review = payload.review;
-  if (!review) {
-    return { kind: 'ignored', reason: 'Missing review payload' };
-  }
-
-  if (!isCodeRabbitBot(review.user?.login)) {
-    return {
-      kind: 'ignored',
-      reason: `Ignoring pull_request_review from "${review.user?.login ?? 'unknown'}"`,
-    };
-  }
-
+function evaluateReviewObject(review: {
+  state?: string | null;
+  body?: string | null;
+  commit_id?: string | null;
+}): EvaluationResult {
   const state = review.state?.toLowerCase() ?? '';
   const body = review.body ?? '';
   const targetCommitSha = review.commit_id ?? undefined;
@@ -171,6 +163,29 @@ function evaluatePullRequestReview(payload: WebhookPayload): EvaluationResult {
     kind: 'ignored',
     reason: 'CodeRabbit pull_request_review did not contain a recognized review verdict',
   };
+}
+
+function evaluatePullRequestReview(payload: WebhookPayload): EvaluationResult {
+  if (payload.action && payload.action !== 'submitted') {
+    return {
+      kind: 'ignored',
+      reason: `Ignoring pull_request_review action "${payload.action}"`,
+    };
+  }
+
+  const review = payload.review;
+  if (!review) {
+    return { kind: 'ignored', reason: 'Missing review payload' };
+  }
+
+  if (!isCodeRabbitBot(review.user?.login)) {
+    return {
+      kind: 'ignored',
+      reason: `Ignoring pull_request_review from "${review.user?.login ?? 'unknown'}"`,
+    };
+  }
+
+  return evaluateReviewObject(review);
 }
 
 function evaluateIssueComment(payload: WebhookPayload): EvaluationResult {
@@ -290,5 +305,102 @@ export class CodeRabbitProvider implements ProviderAdapter {
           reason: `Unsupported event "${eventName}" for provider "${this.name}"`,
         };
     }
+  }
+
+  /**
+   * When pull_request_review workflows cannot run (e.g., workflow only exists on
+   * the default branch while the PR targets another branch), check_run(success)
+   * and reviewed summary comments can still fall back to querying PR reviews.
+   */
+  public shouldAttemptFallback(eventName: string, payload: WebhookPayload): ProviderFallbackCheck {
+    if (eventName === 'check_run') {
+      if (payload.action && payload.action !== 'completed') {
+        return { eligible: false };
+      }
+      const checkRun = payload.check_run;
+      if (
+        checkRun &&
+        checkRun.app?.slug?.toLowerCase() === CODERABBIT_APP_SLUG &&
+        checkRun.conclusion?.toLowerCase() === 'success'
+      ) {
+        return {
+          eligible: true,
+          targetCommitSha: checkRun.head_sha,
+        };
+      }
+      return { eligible: false };
+    }
+
+    if (eventName === 'issue_comment') {
+      if (payload.action && payload.action !== 'created' && payload.action !== 'edited') {
+        return { eligible: false };
+      }
+      if (!payload.issue?.pull_request || !isCodeRabbitBot(payload.comment?.user?.login)) {
+        return { eligible: false };
+      }
+      const body = payload.comment?.body ?? '';
+      if (REVIEWED_COVERAGE_MARKER_REGEX.test(body)) {
+        return {
+          eligible: true,
+          targetCommitSha: extractEmbeddedCommitSha(body),
+        };
+      }
+      return { eligible: false };
+    }
+
+    return { eligible: false };
+  }
+
+  public async evaluateFallback(context: ProviderFallbackContext): Promise<EvaluationResult> {
+    const reviews: Array<{
+      user?: { login?: string } | null;
+      state?: string | null;
+      body?: string | null;
+      commit_id?: string | null;
+      submitted_at?: string | null;
+    }> = [];
+
+    for (let page = 1; page <= 10; page += 1) {
+      const { data } = await context.octokit.rest.pulls.listReviews({
+        owner: context.owner,
+        repo: context.repo,
+        pull_number: context.prNumber,
+        per_page: 100,
+        page,
+      });
+      reviews.push(...data);
+      if (data.length < 100) {
+        break;
+      }
+    }
+
+    const matchingReviews = reviews
+      .map((review, index) => ({ review, index }))
+      .filter(
+        ({ review }) =>
+          isCodeRabbitBot(review.user?.login) &&
+          Boolean(review.commit_id) &&
+          commitShasMatch(review.commit_id!, context.headSha),
+      )
+      .sort((a, b) => {
+        const timeA = a.review.submitted_at ? Date.parse(a.review.submitted_at) : Number.NaN;
+        const timeB = b.review.submitted_at ? Date.parse(b.review.submitted_at) : Number.NaN;
+        if (!Number.isNaN(timeA) && !Number.isNaN(timeB) && timeA !== timeB) {
+          return timeB - timeA;
+        }
+        return b.index - a.index;
+      });
+
+    for (const { review } of matchingReviews) {
+      const result = evaluateReviewObject(review);
+      if (result.kind === 'matched') {
+        return result;
+      }
+    }
+
+    return {
+      kind: 'ignored',
+      reason: 'No CodeRabbit pull_request_review with a recognized verdict found for current head commit',
+    };
   }
 }
