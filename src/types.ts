@@ -2,9 +2,9 @@ import type { getOctokit } from '@actions/github';
 
 export type OctokitClient = ReturnType<typeof getOctokit>;
 
-export type ReviewStatus = 'skipped' | 'changes-requested' | 'approved';
+export type ReviewStatus = 'not-reviewed' | 'skipped' | 'changes-requested' | 'approved';
 
-export type ActionStatus = ReviewStatus | 'cleared' | 'ignored';
+export type ActionStatus = ReviewStatus | 'ignored';
 
 export type LabelMap = Record<ReviewStatus, string>;
 

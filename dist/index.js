@@ -29969,6 +29969,7 @@ function readInputs() {
         githubToken: core.getInput('github-token', { required: true }),
         provider: core.getInput('provider') || 'coderabbit',
         labels: {
+            'not-reviewed': core.getInput('label-not-reviewed') || 'ai: not-reviewed',
             skipped: core.getInput('label-skipped') || 'ai: skipped',
             'changes-requested': core.getInput('label-actionable') || 'ai: changes-requested',
             approved: core.getInput('label-approved') || 'ai: approved',
@@ -30006,8 +30007,12 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getHttpStatus = getHttpStatus;
 exports.buildLabelDefinitions = buildLabelDefinitions;
 exports.syncStatusLabels = syncStatusLabels;
-exports.clearManagedLabels = clearManagedLabels;
+exports.markNotReviewedIfManaged = markNotReviewedIfManaged;
 const DEFAULT_LABEL_STYLES = {
+    'not-reviewed': {
+        color: 'cfd3d7',
+        description: 'PR has not been reviewed by AI for the latest commit',
+    },
     skipped: {
         color: 'fbca04',
         description: 'AI code review was skipped or throttled due to rate limits',
@@ -30030,6 +30035,10 @@ function getHttpStatus(error) {
 }
 function buildLabelDefinitions(labels) {
     return {
+        'not-reviewed': {
+            name: labels['not-reviewed'],
+            ...DEFAULT_LABEL_STYLES['not-reviewed'],
+        },
         skipped: {
             name: labels.skipped,
             ...DEFAULT_LABEL_STYLES.skipped,
@@ -30102,20 +30111,12 @@ async function getCurrentLabelNames(octokit, owner, repo, issueNumber) {
     });
     return new Set(data.map((label) => label.name));
 }
-async function syncStatusLabels(params) {
-    const { octokit, owner, repo, issueNumber, targetStatus, labels, autoCreateLabels, } = params;
+async function applyTargetStatusLabel(params) {
+    const { octokit, owner, repo, issueNumber, targetStatus, labels, autoCreateLabels, currentLabels, } = params;
     const definitions = buildLabelDefinitions(labels);
     const targetDef = definitions[targetStatus];
     if (autoCreateLabels) {
         await ensureLabelExists(octokit, owner, repo, targetDef);
-    }
-    // Always fetch live labels instead of trusting the event payload snapshot,
-    // which can be stale when review/comment events fire close together.
-    const currentLabels = await getCurrentLabelNames(octokit, owner, repo, issueNumber);
-    const managedNames = Array.from(new Set(Object.values(labels)));
-    const labelsToRemove = managedNames.filter((name) => name !== targetDef.name && currentLabels.has(name));
-    for (const labelName of labelsToRemove) {
-        await removeLabelIfPresent(octokit, owner, repo, issueNumber, labelName);
     }
     if (!currentLabels.has(targetDef.name)) {
         await octokit.rest.issues.addLabels({
@@ -30125,20 +30126,45 @@ async function syncStatusLabels(params) {
             labels: [targetDef.name],
         });
     }
+    const managedNames = Array.from(new Set(Object.values(labels)));
+    const labelsToRemove = managedNames.filter((name) => name !== targetDef.name && currentLabels.has(name));
+    for (const labelName of labelsToRemove) {
+        await removeLabelIfPresent(octokit, owner, repo, issueNumber, labelName);
+    }
     return targetDef.name;
 }
-async function clearManagedLabels(params) {
-    const { octokit, owner, repo, issueNumber, labels } = params;
+async function syncStatusLabels(params) {
+    const { octokit, owner, repo, issueNumber } = params;
+    // Always fetch live labels instead of trusting the event payload snapshot,
+    // which can be stale when review/comment events fire close together.
+    const currentLabels = await getCurrentLabelNames(octokit, owner, repo, issueNumber);
+    return applyTargetStatusLabel({
+        ...params,
+        currentLabels,
+    });
+}
+/**
+ * Transition an existing AI review status label to `not-reviewed` when new
+ * commits are pushed, leaving PRs without any managed label untouched.
+ */
+async function markNotReviewedIfManaged(params) {
+    const { octokit, owner, repo, issueNumber, labels, autoCreateLabels } = params;
     const currentLabels = await getCurrentLabelNames(octokit, owner, repo, issueNumber);
     const managedNames = Array.from(new Set(Object.values(labels)));
-    const removed = [];
-    for (const labelName of managedNames) {
-        if (currentLabels.has(labelName)) {
-            await removeLabelIfPresent(octokit, owner, repo, issueNumber, labelName);
-            removed.push(labelName);
-        }
+    const hasManagedLabel = managedNames.some((name) => currentLabels.has(name));
+    if (!hasManagedLabel) {
+        return undefined;
     }
-    return removed;
+    return applyTargetStatusLabel({
+        octokit,
+        owner,
+        repo,
+        issueNumber,
+        targetStatus: 'not-reviewed',
+        labels,
+        autoCreateLabels,
+        currentLabels,
+    });
 }
 
 
@@ -30619,21 +30645,24 @@ async function runAction(params) {
             return { status: 'ignored', label: '' };
         }
         try {
-            const removed = await (0, labels_js_1.clearManagedLabels)({
+            const appliedLabel = await (0, labels_js_1.markNotReviewedIfManaged)({
                 octokit,
                 owner,
                 repo,
                 issueNumber: pr.number,
                 labels: inputs.labels,
+                autoCreateLabels: inputs.autoCreateLabels,
             });
-            core.info(removed.length > 0
-                ? `Cleared stale AI review labels on PR #${pr.number}: ${removed.join(', ')}`
-                : `No AI review labels to clear on PR #${pr.number}`);
-            return { status: 'cleared', label: '', prNumber: pr.number };
+            if (!appliedLabel) {
+                core.info(`No AI review labels on PR #${pr.number}; leaving unlabeled`);
+                return { status: 'ignored', label: '', prNumber: pr.number };
+            }
+            core.info(`Transitioned AI review label on PR #${pr.number} to "${appliedLabel}" (not-reviewed)`);
+            return { status: 'not-reviewed', label: appliedLabel, prNumber: pr.number };
         }
         catch (error) {
             if (eventName === 'pull_request' && pr.isFork && (0, labels_js_1.getHttpStatus)(error) === 403) {
-                core.warning(`Skipping label cleanup on fork PR #${pr.number} because GITHUB_TOKEN lacks write permission on pull_request events.`);
+                core.warning(`Skipping label transition on fork PR #${pr.number} because GITHUB_TOKEN lacks write permission on pull_request events.`);
                 return { status: 'ignored', label: '', prNumber: pr.number };
             }
             throw error;
