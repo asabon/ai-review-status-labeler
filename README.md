@@ -55,6 +55,10 @@ permissions:
   contents: read
   checks: read
 
+concurrency:
+  group: ai-review-status-${{ github.event.pull_request.number || github.event.issue.number || github.event.check_run.pull_requests[0].number || github.event.check_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   label-sync:
     if: >
