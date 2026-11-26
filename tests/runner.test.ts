@@ -215,13 +215,13 @@ describe('runAction', () => {
       octokit: mock.octokit,
     });
 
-    expect(outcome).toEqual({ status: 'skipped', label: 'ai: skipped', prNumber: 25 });
-    expect(mock.getPrLabels()).toEqual(['ai: skipped']);
+    expect(outcome).toEqual({ status: 'not-reviewed', label: 'ai: not-reviewed', prNumber: 25 });
+    expect(mock.getPrLabels()).toEqual(['ai: not-reviewed']);
   });
 
   it('resolves PR via commit lookup when check_run.pull_requests is empty', async () => {
     const mock = createMockOctokit({
-      existingRepoLabels: ['ai: skipped'],
+      existingRepoLabels: ['ai: not-reviewed'],
       associatedPrs: [
         { number: 42, state: 'open', head: { sha: 'sha-42' } },
       ],
@@ -245,7 +245,7 @@ describe('runAction', () => {
       octokit: mock.octokit,
     });
 
-    expect(outcome).toEqual({ status: 'skipped', label: 'ai: skipped', prNumber: 42 });
+    expect(outcome).toEqual({ status: 'not-reviewed', label: 'ai: not-reviewed', prNumber: 42 });
     expect(mock.rest.repos.listPullRequestsAssociatedWithCommit).toHaveBeenCalledWith({
       owner: 'asabon',
       repo: 'test-repo',
