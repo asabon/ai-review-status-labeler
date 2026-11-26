@@ -29,7 +29,7 @@ describe('extractEmbeddedCommitSha', () => {
 });
 
 describe('CodeRabbitProvider check_run events', () => {
-  it('marks skipped check_run as skipped', () => {
+  it('marks skipped check_run as not-reviewed', () => {
     const payload: WebhookPayload = {
       action: 'completed',
       check_run: {
@@ -45,8 +45,30 @@ describe('CodeRabbitProvider check_run events', () => {
 
     expect(provider.evaluate('check_run', payload)).toEqual({
       kind: 'matched',
-      status: 'skipped',
+      status: 'not-reviewed',
       reason: 'CodeRabbit check_run concluded with "skipped"',
+      targetCommitSha: '4fafbef322e2430596f86b14447c2669e01c6b9d',
+    });
+  });
+
+  it('marks skipped check_run with rate-limit output as skipped', () => {
+    const payload: WebhookPayload = {
+      action: 'completed',
+      check_run: {
+        conclusion: 'skipped',
+        head_sha: '4fafbef322e2430596f86b14447c2669e01c6b9d',
+        app: { slug: 'coderabbitai' },
+        output: {
+          title: 'Review rate limited',
+          summary: 'Rate limit exceeded. Review was skipped.',
+        },
+      },
+    };
+
+    expect(provider.evaluate('check_run', payload)).toEqual({
+      kind: 'matched',
+      status: 'skipped',
+      reason: 'CodeRabbit check_run was skipped due to rate limiting',
       targetCommitSha: '4fafbef322e2430596f86b14447c2669e01c6b9d',
     });
   });
@@ -199,7 +221,7 @@ describe('CodeRabbitProvider issue_comment events', () => {
     });
   });
 
-  it('marks summary comment with skip review marker as skipped when not yet reviewed', () => {
+  it('marks summary comment with skip review marker as not-reviewed when not yet reviewed', () => {
     const payload: WebhookPayload = {
       action: 'created',
       issue: { number: 25, pull_request: {} },
@@ -210,6 +232,29 @@ describe('CodeRabbitProvider issue_comment events', () => {
           '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->',
           '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->',
           '> This repository does not receive automatic reviews because it has fewer than 10 stars.',
+          '<!-- end of auto-generated comment: skip review by coderabbit.ai -->',
+        ].join('\n'),
+      },
+    };
+
+    const result = provider.evaluate('issue_comment', payload);
+    expect(result.kind).toBe('matched');
+    if (result.kind === 'matched') {
+      expect(result.status).toBe('not-reviewed');
+    }
+  });
+
+  it('marks summary comment with skip review marker as skipped when rate limited', () => {
+    const payload: WebhookPayload = {
+      action: 'created',
+      issue: { number: 26, pull_request: {} },
+      comment: {
+        user: { login: 'coderabbitai[bot]' },
+        body: [
+          '<!-- coderabbit-ai-generated:v1 -->',
+          '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->',
+          '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->',
+          '> Review rate limited. Please wait before requesting another review.',
           '<!-- end of auto-generated comment: skip review by coderabbit.ai -->',
         ].join('\n'),
       },

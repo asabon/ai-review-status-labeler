@@ -12,7 +12,7 @@ A GitHub Action that inspects AI code review results (e.g., CodeRabbit) and sync
 ## ✨ Features & Safeguards
 
 - **Mutually Exclusive Status Labels:** Automatically removes stale managed labels before applying the newly resolved label.
-- **Rate-Limit & Skip Detection:** Surfaces quiet skips (e.g., `check_run` `skipped`/non-success conclusions, `< 10 stars` skip banners, or `Review rate limited.` replies) without false-positiving on informational replies like `@coderabbitai rate limits` (`Reviews are available now.`).
+- **Rate-Limit & Skip Detection:** Surfaces rate-limit / failure skips (`ai: skipped`) and unreviewed auto-skips (`ai: not-reviewed` for `check_run` `skipped`, `< 10 stars` skip banners, or paused automatic reviews) without false-positiving on informational replies like `@coderabbitai rate limits` (`Reviews are available now.`).
 - **Race-Condition Safe:** Defers `approved` / `changes-requested` verdicts to review and summary comment events so a `check_run` (`success`) never overwrites actionable review findings.
 - **Outdated-Commit Guard:** Verifies `check_run.head_sha`, `review.commit_id`, and embedded CodeRabbit commit metadata against the PR's current `head.sha` to ignore delayed results from superseded commits.
 - **Stale Label Transition on Push:** Supports `pull_request` / `pull_request_target` (`synchronize`) to transition existing AI status labels to `ai: not-reviewed` when new commits are pushed, while leaving PRs without any AI status label untouched.
@@ -25,8 +25,8 @@ A GitHub Action that inspects AI code review results (e.g., CodeRabbit) and sync
 
 | State | Default Label | Default Color | When Applied (`coderabbit`) |
 | :--- | :--- | :--- | :--- |
-| **Not Reviewed** | `ai: not-reviewed` | `#cfd3d7` | `pull_request` / `pull_request_target` (`synchronize`) when the PR already has an AI status label (`ai: approved`, `ai: changes-requested`, `ai: skipped`, or `ai: not-reviewed`). PRs with no AI status label remain unlabeled. |
-| **Skipped / Throttled** | `ai: skipped` | `#fbca04` | `check_run` concludes with non-`success` (e.g., `skipped`, `failure`), summary comment shows an active skip banner, or reply indicates rate limiting (`Review rate limited.`). |
+| **Not Reviewed** | `ai: not-reviewed` | `#cfd3d7` | `pull_request` / `pull_request_target` (`synchronize`) when the PR already has an AI status label (`ai: approved`, `ai: changes-requested`, `ai: skipped`, or `ai: not-reviewed`), or when automatic review is disabled/skipped (e.g., `check_run` `skipped`, `< 10 stars` skip banner, or automatic reviews paused). Unlabeled PRs without a CodeRabbit skip event remain unlabeled on `synchronize`. |
+| **Skipped / Throttled** | `ai: skipped` | `#fbca04` | `check_run` concludes with non-`success` / non-`skipped` (e.g., `failure`, `timed_out`, `cancelled`), or review/comment indicates rate limiting (`Review rate limited.`). |
 | **Actionable Findings** | `ai: changes-requested` | `#d93f0b` | `pull_request_review` has state `changes_requested` or `Actionable comments posted: N` (`N > 0`), or review summary reports actionable comments. |
 | **Approved / Clean** | `ai: approved` | `#0e8a16` | Review summary reports `No actionable comments were generated` / `Actionable comments posted: 0`, or `pull_request_review` has state `approved`. |
 

@@ -38,11 +38,13 @@ const NON_STATUS_SECTION_REGEXES: RegExp[] = [
   /<!--\s*pre_merge_checks_walkthrough_start\s*-->[\s\S]*?<!--\s*pre_merge_checks_walkthrough_end\s*-->/gi,
   /<!--\s*tips_start\s*-->[\s\S]*?<!--\s*tips_end\s*-->/gi,
 ];
-const RATE_LIMIT_OR_SKIP_PATTERNS: RegExp[] = [
+const RATE_LIMIT_PATTERNS: RegExp[] = [
   /\bReview rate limited\b/i,
   /\brate limit(?:ing)?\s+(?:exceeded|reached|hit)\b/i,
   /\bskip(?:ped)?\b[\s\S]{0,60}\brate limit/i,
   /\brate limit(?:s|ed|ing)?\b[\s\S]{0,60}\bskip(?:ped)?\b/i,
+];
+const AUTO_REVIEW_DISABLED_PATTERNS: RegExp[] = [
   /\bauto(?:matic)? reviews? (?:are|is) paused\b/i,
   /\bdoes not receive automatic reviews\b/i,
 ];
@@ -74,12 +76,18 @@ function stripNonStatusSections(body: string): string {
   return cleaned;
 }
 
-function isRateLimitedOrSkippedText(body: string): boolean {
+function evaluateSkipOrRateLimitText(body: string): 'skipped' | 'not-reviewed' | undefined {
   const cleaned = stripNonStatusSections(body);
   if (REVIEWS_AVAILABLE_REGEX.test(cleaned)) {
-    return false;
+    return undefined;
   }
-  return RATE_LIMIT_OR_SKIP_PATTERNS.some((pattern) => pattern.test(cleaned));
+  if (RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(cleaned))) {
+    return 'skipped';
+  }
+  if (AUTO_REVIEW_DISABLED_PATTERNS.some((pattern) => pattern.test(cleaned))) {
+    return 'not-reviewed';
+  }
+  return undefined;
 }
 
 function evaluateCheckRun(payload: WebhookPayload): EvaluationResult {
@@ -111,6 +119,23 @@ function evaluateCheckRun(payload: WebhookPayload): EvaluationResult {
     };
   }
 
+  if (conclusion === 'skipped') {
+    const outputText = [checkRun.output?.title, checkRun.output?.summary, checkRun.output?.text]
+      .filter((part): part is string => Boolean(part))
+      .join('\n');
+    const outputStatus = outputText ? evaluateSkipOrRateLimitText(outputText) : undefined;
+    const status = outputStatus ?? 'not-reviewed';
+    return {
+      kind: 'matched',
+      status,
+      reason:
+        status === 'skipped'
+          ? 'CodeRabbit check_run was skipped due to rate limiting'
+          : 'CodeRabbit check_run concluded with "skipped"',
+      targetCommitSha: checkRun.head_sha,
+    };
+  }
+
   return {
     kind: 'matched',
     status: 'skipped',
@@ -137,11 +162,15 @@ function evaluateReviewObject(review: {
     };
   }
 
-  if (isRateLimitedOrSkippedText(body)) {
+  const skipOrRateLimitStatus = evaluateSkipOrRateLimitText(body);
+  if (skipOrRateLimitStatus) {
     return {
       kind: 'matched',
-      status: 'skipped',
-      reason: 'CodeRabbit pull_request_review indicated review was skipped or rate limited',
+      status: skipOrRateLimitStatus,
+      reason:
+        skipOrRateLimitStatus === 'skipped'
+          ? 'CodeRabbit pull_request_review indicated review was rate limited'
+          : 'CodeRabbit pull_request_review indicated automatic reviews are disabled or paused',
       targetCommitSha,
     };
   }
@@ -260,24 +289,34 @@ function evaluateIssueComment(payload: WebhookPayload): EvaluationResult {
   // CodeRabbit may keep the initial skip-review banner in a summary comment even after
   // a manual review adds final_review_risk_coverage with kind="reviewed".
   const hasReviewedCoverage = REVIEWED_COVERAGE_MARKER_REGEX.test(body);
-  if (SKIP_REVIEW_MARKER_REGEX.test(body) && !hasReviewedCoverage) {
-    return {
-      kind: 'matched',
-      status: 'skipped',
-      reason: 'CodeRabbit summary comment indicated review was skipped',
-      targetCommitSha,
-    };
-  }
-
   const bodyWithoutStaleSkipBanner = hasReviewedCoverage
     ? body.replace(SKIP_REVIEW_BLOCK_REGEX, '')
     : body;
 
-  if (isRateLimitedOrSkippedText(bodyWithoutStaleSkipBanner)) {
+  const textStatus = evaluateSkipOrRateLimitText(bodyWithoutStaleSkipBanner);
+  if (textStatus === 'skipped') {
     return {
       kind: 'matched',
       status: 'skipped',
-      reason: 'CodeRabbit comment indicated review was skipped or rate limited',
+      reason: 'CodeRabbit comment indicated review was rate limited',
+      targetCommitSha,
+    };
+  }
+
+  if (SKIP_REVIEW_MARKER_REGEX.test(body) && !hasReviewedCoverage) {
+    return {
+      kind: 'matched',
+      status: 'not-reviewed',
+      reason: 'CodeRabbit summary comment indicated automatic review was skipped',
+      targetCommitSha,
+    };
+  }
+
+  if (textStatus === 'not-reviewed') {
+    return {
+      kind: 'matched',
+      status: 'not-reviewed',
+      reason: 'CodeRabbit comment indicated automatic reviews are disabled or paused',
       targetCommitSha,
     };
   }

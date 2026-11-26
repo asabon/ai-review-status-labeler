@@ -15,11 +15,11 @@ inputs:
     required: false
     default: 'coderabbit'
   label-not-reviewed:
-    description: 'Label to assign when a PR with an existing AI status label has new commits pushed'
+    description: 'Label to assign when a PR with an existing AI status label has new commits pushed or automatic review is skipped/disabled'
     required: false
     default: 'ai: not-reviewed'
   label-skipped:
-    description: 'Label to assign when review is skipped or throttled'
+    description: 'Label to assign when review is throttled by rate limits or fails unexpectedly'
     required: false
     default: 'ai: skipped'
   label-actionable:
